@@ -1,41 +1,27 @@
-# FBStore Academy : mise en route (15 min)
-1. supabase.com > New project. Notez l'URL et la clé Publishable (Project Settings > API).
-2. SQL Editor : collez tout `schema.sql` et exécutez. Puis, AVANT de créer votre compte, exécutez :
-   insert into super_admins values ('votre@email.com');
-3. Authentication > Providers > Email : laissez "Confirm email" activé.
-4. Authentication > URL Configuration : mettez votre adresse en ligne dans Site URL et Redirect URLs.
-5. Ouvrez `config.js` : collez l'URL et la clé Publishable (clés publiques uniquement).
-6. Hébergez le dossier (Netlify : glisser-déposer ; ou Vercel). HTTPS obligatoire pour la PWA.
-7. Créez votre compte avec l'email super admin, confirmez-le, connectez-vous : l'onglet Admin apparaît.
-8. Admin > Formations : renseignez le prix et les "Instructions de paiement" (ex. numéro Mobile Money).
-   Admin > Modules : collez les liens vidéo (YouTube : https://www.youtube.com/embed/ID).
-Paiement : l'élève envoie sa référence, vous cliquez "Valider" dans Admin > Paiements, il passe Premium.
-Google : Authentication > Providers > Google (clés Google Cloud nécessaires). Webhook automatique : dossier supabase-webhook.
+# FBStore Academy : déploiement (environ 20 minutes)
 
-## Paiement SasPay (optionnel, remplace le paiement manuel)
-1. Exécutez `saspay.sql` (ou `schema.sql` si vous partez de zéro).
-2. supabase functions deploy saspay
-3. supabase secrets set SASPAY_API_KEY=sk_test_...   (testez en sk_test_, puis sk_live_)
-4. Dans `config.js`, remplissez NETWORKS avec les pays/réseaux acceptés par votre compte SasPay.
-L'accès Premium n'est activé que si SasPay renvoie SUCCESS à la vérification faite par le serveur.
+## 1. Supabase (base de données et connexion)
+1. supabase.com > New project. Notez le Project URL et la clé Publishable (Project Settings > API).
+2. SQL Editor : collez et exécutez `database-complete.sql` (nouvelle installation).
+   Base déjà existante : exécutez seulement `sql/upgrade.sql`, puis `sql/upgrade2.sql`, puis `sql/upgrade3.sql`, puis `sql/upgrade4.sql`.
+3. Authentication > Providers > Email : "Confirm email" activé. Authentication > Multi-Factor : TOTP activé.
+4. Authentication > URL Configuration : Site URL et Redirect URLs = l'adresse de votre site (étape 3).
+5. Storage > Settings : réglez la taille maximale d'un fichier (50 Mo en gratuit).
 
-## Mise à jour complète (votre base actuelle)
-1. SQL Editor : exécutez `upgrade.sql` (idempotent). Il active la sécurité RLS sur `coupons` et `site_settings`, ajoute codes promo, paramètres, paiements manuels, témoignages et SasPay.
-2. Redéployez la fonction : supabase functions deploy saspay
-3. Double authentification : activée par défaut côté Supabase (Authentication > Multi-Factor, TOTP). Activez-la ensuite dans Profil > Sécurité.
-   Dès que le super admin l'active, la base exige le code pour toute action admin.
-4. Admin > Paramètres : Pixel Meta, Google Analytics, WhatsApp. Admin > Codes promo : créez vos codes.
+## 2. Configuration du site
+Ouvrez `config.js` : collez URL et clé Publishable (clés publiques seulement).
 
-## Envoi de vidéos et d'images depuis votre ordinateur
-1. SQL Editor : exécutez `upgrade2.sql` (après `upgrade.sql`).
-2. Admin > Modules > Nouveau module : choisissez la vidéo avec le sélecteur de fichiers, une barre de progression s'affiche. Même chose pour l'image de la formation (Formations et prix).
-3. Les vidéos sont privées : seuls les élèves ayant accès au module (gratuit ou Premium) peuvent les lire.
-4. Taille maximale d'un fichier : réglée dans Supabase (Storage > Settings). Le plan gratuit limite à 50 Mo par fichier.
-## Paiement par téléphone
-Admin > Paramètres > Réseaux de paiement SasPay : une ligne par réseau, format  Nom|PAYS|code_réseau|indicatif
-(les codes viennent de https://api.saspay.me/api/v1/countries/ ). L'élève saisit son numéro, reçoit la demande sur son téléphone, la valide, puis voit « Paiement réussi ».
+## 3. Hébergement
+Netlify : glissez-déposez le dossier (sans `supabase/`, `sql/`, `.env`). Ou Vercel. HTTPS obligatoire (PWA).
 
-## Paiement carte + Mobile Money (SasPay)
-Dans Admin > Paramètres > Réseaux, ajoutez une ligne par moyen : Nom|PAYS|code_réseau|indicatif|mobile  ou  ...|card
-(exemple carte : Carte bancaire|CD|code_fourni_par_SasPay||card). L'élève saisit email et téléphone ; Mobile Money = demande sur le téléphone, carte = redirection sécurisée.
-Après un paiement par carte, le site vérifie automatiquement le paiement quand l'élève revient. Redéployez la fonction : supabase functions deploy saspay
+## 4. Paiement SasPay (serveur)
+1. Installez la CLI Supabase, puis : supabase login ; supabase link --project-ref VOTRE_REF
+2. supabase secrets set SASPAY_API_KEY=sk_test_...   (testez avec sk_test_, puis sk_live_)
+3. supabase functions deploy saspay
+4. Admin > Paramètres > "Voir les pays et réseaux disponibles sur mon compte" : relevez les codes, puis remplissez
+   "Réseaux de paiement" : Nom|PAYS|code_réseau|indicatif|mobile  (ou  ...|card pour la carte)
+5. Ajoutez la clé API uniquement dans les secrets Supabase. Jamais dans config.js ni sur GitHub.
+
+## 5. Premier lancement
+Créez votre compte avec l'email super admin, confirmez-le, connectez-vous : l'onglet Admin apparaît.
+Profil > Sécurité : activez la double authentification (scannez le QR code). Admin : prix, vidéos, codes promo, paramètres.
