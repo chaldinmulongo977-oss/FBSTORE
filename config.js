@@ -6,5 +6,7 @@ window.APP_CONFIG = {
   // Réseaux SasPay proposés au paiement (codes pays/réseaux : GET https://api.saspay.me/api/v1/countries/ et doc "Réseaux").
   // Laissez vide [] pour garder le paiement manuel. Exemple tiré de la doc SasPay :
   // NETWORKS: [{ label: "MTN Bénin", country: "BJ", network: "mtn_bj" }]
+  // Notifications push : clé PUBLIQUE VAPID (générée avec: npx web-push generate-vapid-keys). Laissez vide pour désactiver.
+  VAPID_KEY: "",
   NETWORKS: []
 };

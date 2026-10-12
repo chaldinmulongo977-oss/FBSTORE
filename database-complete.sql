@@ -280,3 +280,18 @@ create table if not exists forwarders(id uuid primary key default gen_random_uui
 alter table forwarders enable row level security;
 drop policy if exists f_sel on forwarders; create policy f_sel on forwarders for select using ((active and is_premium()) or has_perm('forwarders'));
 drop policy if exists f_adm on forwarders; create policy f_adm on forwarders for all using (has_perm('forwarders')) with check (has_perm('forwarders'));
+
+-- ===== Notifications push (upgrade6) =====
+create table if not exists push_subscriptions(id uuid primary key default gen_random_uuid(), user_id uuid not null references profiles on delete cascade, endpoint text unique not null, p256dh text not null, auth text not null, created_at timestamptz default now());
+create table if not exists notifications(id uuid primary key default gen_random_uuid(), title text not null, body text, url text, audience text, sent int default 0, failed int default 0, created_by uuid references profiles on delete set null, created_at timestamptz default now());
+alter table push_subscriptions enable row level security; alter table notifications enable row level security;
+drop policy if exists psub_own on push_subscriptions; create policy psub_own on push_subscriptions for select using (user_id=auth.uid() or has_perm('settings'));
+drop policy if exists psub_del on push_subscriptions; create policy psub_del on push_subscriptions for delete using (user_id=auth.uid());
+drop policy if exists notif_sel on notifications; create policy notif_sel on notifications for select using (has_perm('settings'));
+create or replace function save_push(p_endpoint text, p_p256dh text, p_auth text) returns void language plpgsql security definer set search_path=public as $$
+begin
+  if auth.uid() is null then raise exception 'Non connecté'; end if;
+  insert into push_subscriptions(user_id,endpoint,p256dh,auth) values(auth.uid(),p_endpoint,p_p256dh,p_auth)
+  on conflict (endpoint) do update set user_id=auth.uid(), p256dh=excluded.p256dh, auth=excluded.auth;
+end $$;
+revoke all on function save_push(text,text,text) from public; grant execute on function save_push(text,text,text) to authenticated;

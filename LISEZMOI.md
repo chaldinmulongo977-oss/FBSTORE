@@ -32,3 +32,11 @@ Profil > Sécurité : activez la double authentification (scannez le QR code). A
 3. Admin > Équipe et rôles (super admin) : ajoutez un membre par email (le compte doit exister), choisissez un rôle ou cochez seulement les accès voulus.
 4. Admin > Paramètres : maintenance, support (email, WhatsApp), certificat (logo, signature), Pixel Facebook + token Conversions API.
 5. Les fonctions Premium (communauté, transitaires, calculateur) sont réservées aux comptes Premium et à l'équipe autorisée.
+
+## Mise à jour : suivi des paiements, test, notifications push
+1. SQL : exécutez `sql/upgrade6.sql` (base existante). Les nouvelles installations utilisent `database-complete.sql`.
+2. Secrets serveur : copiez `.env.example` en `.env`, remplissez-le, puis `supabase secrets set --env-file .env` (le `.env` est ignoré par git).
+3. Notifications : `npx web-push generate-vapid-keys`. Clé publique : dans `config.js` (`VAPID_KEY`) et dans `VAPID_PUBLIC_KEY`. Clé privée : seulement dans `VAPID_PRIVATE_KEY`.
+4. Déployez : `supabase functions deploy notify`, puis hébergez à nouveau le site.
+5. Admin > Paiements : suivi Payé / En cours / Échec, bouton « Vérifier », test de connexion et test de paiement.
+6. Admin > Notifications : envoi à tous, aux Premium, aux gratuits, ou à vous seul (test). Les élèves s'abonnent depuis Profil > Notifications.
