@@ -3,7 +3,7 @@
 ## 1. Supabase (base de données et connexion)
 1. supabase.com > New project. Notez le Project URL et la clé Publishable (Project Settings > API).
 2. SQL Editor : collez et exécutez `database-complete.sql` (nouvelle installation).
-   Base déjà existante : exécutez seulement `sql/upgrade.sql`, puis `sql/upgrade2.sql`, puis `sql/upgrade3.sql`, puis `sql/upgrade4.sql`.
+   Base déjà existante : exécutez seulement `sql/upgrade.sql`, puis `sql/upgrade2.sql`, puis `sql/upgrade3.sql`, puis `sql/upgrade4.sql`, puis `sql/upgrade5.sql`.
 3. Authentication > Providers > Email : "Confirm email" activé. Authentication > Multi-Factor : TOTP activé.
 4. Authentication > URL Configuration : Site URL et Redirect URLs = l'adresse de votre site (étape 3).
 5. Storage > Settings : réglez la taille maximale d'un fichier (50 Mo en gratuit).
@@ -25,3 +25,10 @@ Netlify : glissez-déposez le dossier (sans `supabase/`, `sql/`, `.env`). Ou Ver
 ## 5. Premier lancement
 Créez votre compte avec l'email super admin, confirmez-le, connectez-vous : l'onglet Admin apparaît.
 Profil > Sécurité : activez la double authentification (scannez le QR code). Admin : prix, vidéos, codes promo, paramètres.
+
+## Mise à jour : équipe, maintenance, support, communauté, transitaires
+1. SQL : exécutez `sql/upgrade5.sql` (base existante). Les nouvelles installations utilisent `database-complete.sql`.
+2. Fonctions serveur : supabase functions deploy saspay ; supabase functions deploy admin-users
+3. Admin > Équipe et rôles (super admin) : ajoutez un membre par email (le compte doit exister), choisissez un rôle ou cochez seulement les accès voulus.
+4. Admin > Paramètres : maintenance, support (email, WhatsApp), certificat (logo, signature), Pixel Facebook + token Conversions API.
+5. Les fonctions Premium (communauté, transitaires, calculateur) sont réservées aux comptes Premium et à l'équipe autorisée.
