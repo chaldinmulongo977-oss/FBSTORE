@@ -191,3 +191,92 @@ create or replace function sync_profile_email() returns trigger language plpgsql
 begin perform set_config('app.sync_email','1',true); update profiles set email=lower(new.email) where id=new.id; return new; end $$;
 drop trigger if exists on_email_change on auth.users;
 create trigger on_email_change after update of email on auth.users for each row when (old.email is distinct from new.email) execute function sync_profile_email();
+
+-- FBStore Academy : ÉQUIPE ET RÔLES, MAINTENANCE, SUPPORT, COMMUNAUTÉ, TRANSITAIRES, TOKEN FACEBOOK. À exécuter après upgrade4.sql. Idempotent.
+create table if not exists private_settings(key text primary key, value text);
+create table if not exists staff_roles(user_id uuid primary key references profiles on delete cascade, role text not null check (role in ('admin','comptable','marketing','influenceur','personnalise')), permissions text[] not null default '{}', created_by uuid references profiles on delete set null, created_at timestamptz default now());
+alter table coupons add column if not exists owner_id uuid references profiles on delete set null;
+alter table payments drop constraint if exists payments_user_id_fkey;
+alter table payments add constraint payments_user_id_fkey foreign key (user_id) references profiles(id) on delete set null;
+alter table payments drop constraint if exists payments_confirmed_by_fkey;
+alter table payments add constraint payments_confirmed_by_fkey foreign key (confirmed_by) references profiles(id) on delete set null;
+insert into site_settings(key,value) values ('maintenance',''),('maintenance_msg',''),('cert_signer',''),('cert_title',''),('cert_signature',''),('site_logo','') on conflict (key) do nothing;
+
+create or replace function mfa_ok() returns boolean language sql stable security definer set search_path=public as $$
+  select coalesce(auth.jwt()->>'aal','aal1')='aal2' or not exists(select 1 from auth.mfa_factors where user_id=auth.uid() and status='verified') $$;
+create or replace function is_admin() returns boolean language sql stable security definer set search_path=public as $$
+  select exists(select 1 from profiles where id=auth.uid() and role='super_admin') and mfa_ok() $$;
+create or replace function has_perm(p text) returns boolean language sql stable security definer set search_path=public as $$
+  select is_admin() or (mfa_ok() and exists(select 1 from staff_roles s where s.user_id=auth.uid() and p = any(s.permissions))) $$;
+create or replace function is_maintenance() returns boolean language sql stable security definer set search_path=public as $$
+  select coalesce((select value from site_settings where key='maintenance'),'')='1' $$;
+create or replace function guard_profile() returns trigger language plpgsql security definer set search_path=public as $$
+begin if auth.uid() is not null and coalesce(current_setting('app.sync_email',true),'')<>'1' then new.role:=old.role; new.email:=old.email; if not has_perm('users') then new.status:=old.status; end if; end if; return new; end $$;
+
+alter table private_settings enable row level security; alter table staff_roles enable row level security;
+drop policy if exists ps_adm on private_settings; create policy ps_adm on private_settings for all using (has_perm('settings')) with check (has_perm('settings'));
+drop policy if exists sr_sel on staff_roles; create policy sr_sel on staff_roles for select using (user_id=auth.uid() or is_admin());
+drop policy if exists sr_adm on staff_roles; create policy sr_adm on staff_roles for all using (is_admin()) with check (is_admin());   -- seuls les super admins gèrent l'équipe
+drop policy if exists p_sel on profiles; create policy p_sel on profiles for select using (id=auth.uid() or has_perm('users') or has_perm('payments') or has_perm('stats'));
+drop policy if exists p_upd on profiles; create policy p_upd on profiles for update using (id=auth.uid() or has_perm('users'));
+drop policy if exists c_adm on courses; create policy c_adm on courses for all using (has_perm('content')) with check (has_perm('content'));
+drop policy if exists m_sel on modules; create policy m_sel on modules for select using ((not is_maintenance() and (is_free or is_premium())) or has_perm('content'));
+drop policy if exists m_adm on modules; create policy m_adm on modules for all using (has_perm('content')) with check (has_perm('content'));
+drop policy if exists k_adm on coupons; create policy k_adm on coupons for all using (has_perm('coupons')) with check (has_perm('coupons'));
+drop policy if exists k_own on coupons; create policy k_own on coupons for select using (owner_id=auth.uid());
+drop policy if exists t_adm on testimonials; create policy t_adm on testimonials for all using (has_perm('testimonials')) with check (has_perm('testimonials'));
+drop policy if exists y_sel on payments; create policy y_sel on payments for select using (user_id=auth.uid() or has_perm('payments') or has_perm('stats'));
+drop policy if exists y_ins on payments; create policy y_ins on payments for insert with check (has_perm('payments'));
+drop policy if exists pr_sel on payment_requests; create policy pr_sel on payment_requests for select using (user_id=auth.uid() or has_perm('payments'));
+drop policy if exists pr_adm on payment_requests; create policy pr_adm on payment_requests for update using (has_perm('payments')) with check (has_perm('payments'));
+drop policy if exists g_adm on progress; create policy g_adm on progress for select using (has_perm('stats'));
+drop policy if exists sa_sel on saspay_attempts; create policy sa_sel on saspay_attempts for select using (user_id=auth.uid() or has_perm('payments'));
+drop policy if exists s_sel on site_settings; create policy s_sel on site_settings for select using (key in ('fb_pixel','google_analytics','whatsapp','support_email','saspay_networks','maintenance','maintenance_msg','cert_signer','cert_title','cert_signature','site_logo'));
+drop policy if exists s_adm on site_settings; create policy s_adm on site_settings for all using (has_perm('settings')) with check (has_perm('settings'));
+drop policy if exists media_ins on storage.objects; create policy media_ins on storage.objects for insert with check (bucket_id='media' and (has_perm('content') or has_perm('settings')));
+drop policy if exists media_upd on storage.objects; create policy media_upd on storage.objects for update using (bucket_id='media' and (has_perm('content') or has_perm('settings')));
+drop policy if exists media_del on storage.objects; create policy media_del on storage.objects for delete using (bucket_id='media' and (has_perm('content') or has_perm('settings')));
+drop policy if exists vid_read on storage.objects; create policy vid_read on storage.objects for select using (bucket_id='videos' and (has_perm('content') or (not is_maintenance() and exists(select 1 from public.modules m where m.video_path=name))));
+drop policy if exists vid_ins on storage.objects; create policy vid_ins on storage.objects for insert with check (bucket_id='videos' and has_perm('content'));
+drop policy if exists vid_upd on storage.objects; create policy vid_upd on storage.objects for update using (bucket_id='videos' and has_perm('content'));
+drop policy if exists vid_del on storage.objects; create policy vid_del on storage.objects for delete using (bucket_id='videos' and has_perm('content'));
+
+-- Support client avec confirmation de lecture (read_at)
+create table if not exists support_messages(id uuid primary key default gen_random_uuid(), user_id uuid not null references profiles on delete cascade, user_name text, user_email text, sender text not null check (sender in ('user','staff')), body text not null check (length(body) between 1 and 2000), created_at timestamptz default now(), read_at timestamptz);
+alter table support_messages enable row level security;
+create or replace function sm_before() returns trigger language plpgsql security definer set search_path=public as $$
+begin if tg_op='INSERT' then select name,email into new.user_name,new.user_email from profiles where id=new.user_id; new.read_at:=null; return new;
+  else if (old.sender='staff' and old.user_id=auth.uid()) or (old.sender='user' and has_perm('support')) then new:=old; new.read_at:=coalesce(old.read_at,now()); else new:=old; end if; return new; end if; end $$;
+drop trigger if exists sm_trg on support_messages; create trigger sm_trg before insert or update on support_messages for each row execute function sm_before();
+drop policy if exists sm_sel on support_messages; create policy sm_sel on support_messages for select using (user_id=auth.uid() or has_perm('support'));
+drop policy if exists sm_ins_u on support_messages; create policy sm_ins_u on support_messages for insert with check (user_id=auth.uid() and sender='user');
+drop policy if exists sm_ins_s on support_messages; create policy sm_ins_s on support_messages for insert with check (has_perm('support') and sender='staff');
+drop policy if exists sm_upd on support_messages; create policy sm_upd on support_messages for update using (user_id=auth.uid() or has_perm('support'));
+
+-- Communauté Premium (publications, photos, j'aime, commentaires)
+create table if not exists community_posts(id uuid primary key default gen_random_uuid(), user_id uuid not null references profiles on delete cascade, author_name text, body text check (length(body)<=2000), image_path text, created_at timestamptz default now(), check (coalesce(length(body),0)>0 or image_path is not null));
+create table if not exists community_comments(id uuid primary key default gen_random_uuid(), post_id uuid not null references community_posts on delete cascade, user_id uuid not null references profiles on delete cascade, author_name text, body text not null check (length(body) between 1 and 1000), created_at timestamptz default now());
+create table if not exists community_likes(post_id uuid references community_posts on delete cascade, user_id uuid references profiles on delete cascade, primary key(post_id,user_id));
+alter table community_posts enable row level security; alter table community_comments enable row level security; alter table community_likes enable row level security;
+create or replace function set_author() returns trigger language plpgsql security definer set search_path=public as $$ begin new.author_name:=(select name from profiles where id=new.user_id); return new; end $$;
+drop trigger if exists cp_author on community_posts; create trigger cp_author before insert on community_posts for each row execute function set_author();
+drop trigger if exists cc_author on community_comments; create trigger cc_author before insert on community_comments for each row execute function set_author();
+drop policy if exists cp_sel on community_posts; create policy cp_sel on community_posts for select using (is_premium() or has_perm('community'));
+drop policy if exists cp_ins on community_posts; create policy cp_ins on community_posts for insert with check (user_id=auth.uid() and (is_premium() or has_perm('community')));
+drop policy if exists cp_del on community_posts; create policy cp_del on community_posts for delete using (user_id=auth.uid() or has_perm('community'));
+drop policy if exists cc_sel on community_comments; create policy cc_sel on community_comments for select using (is_premium() or has_perm('community'));
+drop policy if exists cc_ins on community_comments; create policy cc_ins on community_comments for insert with check (user_id=auth.uid() and (is_premium() or has_perm('community')));
+drop policy if exists cc_del on community_comments; create policy cc_del on community_comments for delete using (user_id=auth.uid() or has_perm('community'));
+drop policy if exists cl_sel on community_likes; create policy cl_sel on community_likes for select using (is_premium() or has_perm('community'));
+drop policy if exists cl_ins on community_likes; create policy cl_ins on community_likes for insert with check (user_id=auth.uid() and (is_premium() or has_perm('community')));
+drop policy if exists cl_del on community_likes; create policy cl_del on community_likes for delete using (user_id=auth.uid());
+insert into storage.buckets (id,name,public,file_size_limit,allowed_mime_types) values ('community','community',false,5242880,array['image/jpeg','image/png','image/webp']) on conflict (id) do nothing;
+drop policy if exists com_read on storage.objects; create policy com_read on storage.objects for select using (bucket_id='community' and (is_premium() or has_perm('community')));
+drop policy if exists com_ins on storage.objects; create policy com_ins on storage.objects for insert with check (bucket_id='community' and (is_premium() or has_perm('community')) and (storage.foldername(name))[1]=auth.uid()::text);
+drop policy if exists com_del on storage.objects; create policy com_del on storage.objects for delete using (bucket_id='community' and ((storage.foldername(name))[1]=auth.uid()::text or has_perm('community')));
+
+-- Annuaire des transitaires (Premium)
+create table if not exists forwarders(id uuid primary key default gen_random_uuid(), name text not null, city text, country text, address text, phone text, whatsapp text, services text, notes text, active boolean not null default true, created_at timestamptz default now());
+alter table forwarders enable row level security;
+drop policy if exists f_sel on forwarders; create policy f_sel on forwarders for select using ((active and is_premium()) or has_perm('forwarders'));
+drop policy if exists f_adm on forwarders; create policy f_adm on forwarders for all using (has_perm('forwarders')) with check (has_perm('forwarders'));
