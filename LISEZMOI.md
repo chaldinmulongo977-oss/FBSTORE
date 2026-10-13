@@ -17,7 +17,7 @@ Netlify : glissez-déposez le dossier (sans `supabase/`, `sql/`, `.env`). Ou Ver
 ## 4. Paiement SasPay (serveur)
 1. Installez la CLI Supabase, puis : supabase login ; supabase link --project-ref VOTRE_REF
 2. supabase secrets set SASPAY_API_KEY=sk_test_...   (testez avec sk_test_, puis sk_live_)
-3. supabase functions deploy saspay ; supabase functions deploy saspay-webhook --no-verify-jwt
+3. supabase functions deploy saspay
 4. Admin > Paramètres > "Voir les pays et réseaux disponibles sur mon compte" : relevez les codes, puis remplissez
    "Réseaux de paiement" : Nom|PAYS|code_réseau|indicatif|mobile  (ou  ...|card pour la carte)
 5. Ajoutez la clé API uniquement dans les secrets Supabase. Jamais dans config.js ni sur GitHub.
@@ -33,20 +33,17 @@ Profil > Sécurité : activez la double authentification (scannez le QR code). A
 4. Admin > Paramètres : maintenance, support (email, WhatsApp), certificat (logo, signature), Pixel Facebook + token Conversions API.
 5. Les fonctions Premium (communauté, transitaires, calculateur) sont réservées aux comptes Premium et à l'équipe autorisée.
 
-## Mise à jour : suivi des paiements, test, notifications push
-1. SQL : exécutez `sql/upgrade6.sql` (base existante). Les nouvelles installations utilisent `database-complete.sql`.
-2. Secrets serveur : copiez `.env.example` en `.env`, remplissez-le, puis `supabase secrets set --env-file .env` (le `.env` est ignoré par git).
-3. Notifications : `npx web-push generate-vapid-keys`. Clé publique : dans `config.js` (`VAPID_KEY`) et dans `VAPID_PUBLIC_KEY`. Clé privée : seulement dans `VAPID_PRIVATE_KEY`.
-4. Déployez : `supabase functions deploy notify`, puis hébergez à nouveau le site.
-5. Admin > Paiements : suivi Payé / En cours / Échec, bouton « Vérifier », test de connexion et test de paiement.
-6. Admin > Notifications : envoi à tous, aux Premium, aux gratuits, ou à vous seul (test). Les élèves s'abonnent depuis Profil > Notifications.
+## Paiements, webhook et notifications (mise à jour)
+1. SQL : exécutez `sql/upgrade6.sql` (base existante). Nouvelle installation : `database-complete.sql`.
+2. Fonctions (Supabase > Edge Functions) : redéployez `saspay` ; créez `saspay-webhook` (Verify JWT DÉSACTIVÉ) et `push-send` (Verify JWT activé).
+3. Admin > Config. paiements : choisissez le mode (test/production), collez vos clés sk_test_ / sk_live_, vos moyens de paiement, le lien SasPay, puis "Tester la configuration" et "Envoyer un paiement de test".
+4. Webhook : générez un secret, enregistrez, puis collez l'adresse affichée dans le tableau de bord SasPay (section Webhooks).
+5. Admin > Notifications : générez les clés d'envoi une fois ; les élèves activent les notifications dans Profil.
 
-## Mise à jour : configuration SasPay dans l'admin, webhook, test de paiement
-1. SQL : exécutez à nouveau `sql/upgrade6.sql` (idempotent) : il ajoute le coffre à secrets `payment_secrets` et le suivi détaillé des tentatives.
-2. Déployez les fonctions : `supabase functions deploy saspay` puis `supabase functions deploy saspay-webhook --no-verify-jwt` (le webhook n'a pas de session Supabase, d'où `--no-verify-jwt`).
-3. Admin > Paiements > Configuration SasPay (super admin) : mode (automatique / production / test), clé LIVE, clé TEST, secret du webhook, URL de l'API, devise et taux de conversion. Les clés sont stockées côté serveur et ne sont jamais réaffichées (aperçu masqué seulement).
-   - Votre `SASPAY_API_KEY` du fichier `.env` reste utilisée en mode « Automatique ». Pour forcer une clé saisie ici, choisissez « Production » ou « Test ».
-4. Webhook (facultatif) : copiez l'URL affichée dans Configuration SasPay, ajoutez-la dans app.saspay.me > Développeur > Webhooks. Le contenu du webhook n'est jamais cru : le serveur revérifie le paiement auprès de SasPay avant d'activer Premium.
-5. Admin > Paiements > Tester : « Tester la connexion » valide la clé ; « Lancer un paiement test » envoie une vraie demande (montant libre). Un test n'active jamais Premium et est marqué « test » dans la liste.
-6. Statuts : Payé (SUCCESS), En cours (PENDING), Échec (tout autre statut). Le bouton « Vérifier » interroge SasPay à la demande.
-7. Si une clé secrète a été collée dans un chat, un ticket ou un dépôt Git : régénérez-la dans app.saspay.me > Développeur, puis mettez à jour le secret.
+## Mise à jour : moyens de paiement, chat vocal, visiteurs, suivi des ventes
+1. SQL : exécutez `sql/upgrade7.sql` (après upgrade6). Nouvelle installation : `database-complete.sql`.
+2. Fonctions : redéployez `saspay` et `saspay-webhook` ; créez `chat-notify` (Verify JWT activé).
+3. Admin > Config. paiements : ajoutez chaque moyen de paiement avec le bouton "Ajouter" (nom, pays, code réseau SasPay, indicatif, mobile ou carte).
+4. Admin > Notifications : "Générer les clés" une seule fois (sans cela, aucune notification ne part).
+5. Admin > Paramètres : Pixel Meta + token Conversions API + code de test ; Google Analytics + clé secrète API Measurement Protocol ; puis "Tester les événements de vente".
+6. Droits : modifier formations et prix exige l'accès "Formations et prix" (super admin par défaut). Les membres déjà créés gardent leurs anciens accès : vérifiez-les dans Équipe et rôles.
