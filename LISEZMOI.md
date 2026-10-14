@@ -47,3 +47,6 @@ Profil > Sécurité : activez la double authentification (scannez le QR code). A
 4. Admin > Notifications : "Générer les clés" une seule fois (sans cela, aucune notification ne part).
 5. Admin > Paramètres : Pixel Meta + token Conversions API + code de test ; Google Analytics + clé secrète API Measurement Protocol ; puis "Tester les événements de vente".
 6. Droits : modifier formations et prix exige l'accès "Formations et prix" (super admin par défaut). Les membres déjà créés gardent leurs anciens accès : vérifiez-les dans Équipe et rôles.
+
+## Important : droits d'accès (erreur "permission denied for table ...")
+Exécutez `sql/upgrade8.sql` dans Supabase > SQL Editor. Puis lisez `GUIDE-API.md` (où mettre chaque clé) ; l'outil `outils/assistant-api.html` aide à préparer les clés.
