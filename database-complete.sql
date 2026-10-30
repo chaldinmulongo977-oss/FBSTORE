@@ -280,18 +280,121 @@ create table if not exists forwarders(id uuid primary key default gen_random_uui
 alter table forwarders enable row level security;
 drop policy if exists f_sel on forwarders; create policy f_sel on forwarders for select using ((active and is_premium()) or has_perm('forwarders'));
 drop policy if exists f_adm on forwarders; create policy f_adm on forwarders for all using (has_perm('forwarders')) with check (has_perm('forwarders'));
-
--- ===== Notifications push (upgrade6) =====
+-- Paiements (configuration manuelle, statuts, webhook) et notifications push. À exécuter après upgrade5.sql. Idempotent.
+create table if not exists payment_secrets(key text primary key, value text);   -- clés API SasPay, secret webhook, clés VAPID : lisibles par le super admin uniquement
+alter table payment_secrets enable row level security;
+drop policy if exists psec_adm on payment_secrets; create policy psec_adm on payment_secrets for all using (is_admin()) with check (is_admin());
+drop policy if exists sa_sel on saspay_attempts; create policy sa_sel on saspay_attempts for select using (user_id=auth.uid() or has_perm('payments') or has_perm('stats'));
 create table if not exists push_subscriptions(id uuid primary key default gen_random_uuid(), user_id uuid not null references profiles on delete cascade, endpoint text unique not null, p256dh text not null, auth text not null, created_at timestamptz default now());
-create table if not exists notifications(id uuid primary key default gen_random_uuid(), title text not null, body text, url text, audience text, sent int default 0, failed int default 0, created_by uuid references profiles on delete set null, created_at timestamptz default now());
-alter table push_subscriptions enable row level security; alter table notifications enable row level security;
-drop policy if exists psub_own on push_subscriptions; create policy psub_own on push_subscriptions for select using (user_id=auth.uid() or has_perm('settings'));
-drop policy if exists psub_del on push_subscriptions; create policy psub_del on push_subscriptions for delete using (user_id=auth.uid());
-drop policy if exists notif_sel on notifications; create policy notif_sel on notifications for select using (has_perm('settings'));
-create or replace function save_push(p_endpoint text, p_p256dh text, p_auth text) returns void language plpgsql security definer set search_path=public as $$
+alter table push_subscriptions enable row level security;
+drop policy if exists pushs_own on push_subscriptions; create policy pushs_own on push_subscriptions for all using (user_id=auth.uid()) with check (user_id=auth.uid());
+drop policy if exists pushs_cnt on push_subscriptions; create policy pushs_cnt on push_subscriptions for select using (has_perm('settings'));
+insert into site_settings(key,value) values ('pay_link',''),('vapid_public','') on conflict (key) do nothing;
+drop policy if exists s_sel on site_settings;
+create policy s_sel on site_settings for select using (key in ('fb_pixel','google_analytics','whatsapp','support_email','saspay_networks','maintenance','maintenance_msg','cert_signer','cert_title','cert_signature','site_logo','pay_link','vapid_public'));
+-- Moyens de paiement (formulaire), chat vocal temps réel, visiteurs, droits "Formations et prix". À exécuter après upgrade6.sql. Idempotent.
+create table if not exists payment_methods(id uuid primary key default gen_random_uuid(), label text not null, country text not null, network text not null, dial text default '', type text not null default 'mobile' check (type in ('mobile','card')), active boolean not null default true, sort int not null default 0, created_at timestamptz default now());
+alter table payment_methods enable row level security;
+drop policy if exists pm_sel on payment_methods; create policy pm_sel on payment_methods for select using (active or is_admin());
+drop policy if exists pm_adm on payment_methods; create policy pm_adm on payment_methods for all using (is_admin()) with check (is_admin());
+
+alter table saspay_attempts add column if not exists fbp text; alter table saspay_attempts add column if not exists fbc text;
+alter table saspay_attempts add column if not exists ga_cid text; alter table saspay_attempts add column if not exists src_url text;
+
+-- Seul le super admin (ou un membre avec l'accès "courses") peut modifier formations et prix
+drop policy if exists c_adm on courses; create policy c_adm on courses for all using (has_perm('courses')) with check (has_perm('courses'));
+
+-- Messages vocaux
+alter table support_messages add column if not exists audio_path text; alter table support_messages add column if not exists audio_secs int;
+insert into storage.buckets(id,name,public,allowed_mime_types,file_size_limit) values ('chat','chat',false,array['audio/webm','audio/ogg','audio/mp4','audio/mpeg','audio/aac','audio/x-m4a','audio/wav'],5242880) on conflict (id) do nothing;
+drop policy if exists chat_sel on storage.objects; create policy chat_sel on storage.objects for select using (bucket_id='chat' and ((storage.foldername(name))[1]=auth.uid()::text or public.has_perm('support')));
+drop policy if exists chat_ins on storage.objects; create policy chat_ins on storage.objects for insert with check (bucket_id='chat' and ((storage.foldername(name))[1]=auth.uid()::text or public.has_perm('support')));
+drop policy if exists chat_del on storage.objects; create policy chat_del on storage.objects for delete using (bucket_id='chat' and public.has_perm('support'));
+do $$ begin alter publication supabase_realtime add table support_messages; exception when others then null; end $$;
+
+-- Visiteurs du site (sans cookie, sans adresse IP)
+create table if not exists visits(id bigserial primary key, sid text not null, path text not null, ref text, device text, user_id uuid, created_at timestamptz default now());
+create index if not exists visits_created on visits(created_at); create index if not exists visits_sid on visits(sid, path, created_at);
+alter table visits enable row level security;
+drop policy if exists v_sel on visits; create policy v_sel on visits for select using (has_perm('stats'));
+create or replace function track_visit(p_sid text, p_path text, p_ref text, p_dev text) returns void language plpgsql security definer set search_path=public as $$
 begin
-  if auth.uid() is null then raise exception 'Non connecté'; end if;
-  insert into push_subscriptions(user_id,endpoint,p256dh,auth) values(auth.uid(),p_endpoint,p_p256dh,p_auth)
-  on conflict (endpoint) do update set user_id=auth.uid(), p256dh=excluded.p256dh, auth=excluded.auth;
+  if length(coalesce(p_sid,'')) not between 8 and 64 or length(coalesce(p_path,''))=0 or length(p_path)>120 then return; end if;
+  if exists(select 1 from visits where sid=p_sid and path=p_path and created_at>now()-interval '20 seconds') then return; end if;
+  insert into visits(sid,path,ref,device,user_id) values (p_sid,p_path,left(coalesce(p_ref,''),80),case when p_dev in ('mobile','tablet','desktop') then p_dev else 'desktop' end,auth.uid());
 end $$;
-revoke all on function save_push(text,text,text) from public; grant execute on function save_push(text,text,text) to authenticated;
+grant execute on function track_visit(text,text,text,text) to anon, authenticated;
+create or replace function visit_stats(p_days int default 30) returns jsonb language plpgsql stable security definer set search_path=public as $$
+declare r jsonb; since timestamptz := now() - make_interval(days => greatest(1, least(p_days, 365)));
+begin
+  if not has_perm('stats') then raise exception 'forbidden'; end if;
+  select jsonb_build_object(
+    'online',(select count(distinct sid) from visits where created_at>now()-interval '5 minutes'),
+    'today',(select count(distinct sid) from visits where created_at>=date_trunc('day',now())),
+    'week',(select count(distinct sid) from visits where created_at>now()-interval '7 days'),
+    'period',(select count(distinct sid) from visits where created_at>since),
+    'views',(select count(*) from visits where created_at>since),
+    'pages',(select coalesce(jsonb_agg(x),'[]'::jsonb) from (select path, count(*) n from visits where created_at>since group by path order by n desc limit 8) x),
+    'refs',(select coalesce(jsonb_agg(x),'[]'::jsonb) from (select coalesce(nullif(ref,''),'Direct') ref, count(distinct sid) n from visits where created_at>since group by 1 order by n desc limit 8) x),
+    'devices',(select coalesce(jsonb_agg(x),'[]'::jsonb) from (select device, count(distinct sid) n from visits where created_at>since group by device) x),
+    'daily',(select coalesce(jsonb_agg(x order by x.d),'[]'::jsonb) from (select to_char(created_at::date,'YYYY-MM-DD') d, count(distinct sid) v, count(*) p from visits where created_at>since group by 1) x)
+  ) into r;
+  return r;
+end $$;
+grant execute on function visit_stats(int) to authenticated;
+-- DROITS D'ACCÈS AUX TABLES (corrige "permission denied for table ..."). À exécuter UNE fois dans Supabase > SQL Editor. Idempotent.
+-- Sur les nouveaux projets Supabase, les tables créées en SQL ne sont plus accessibles automatiquement : on donne les droits ici.
+-- La sécurité reste assurée par la RLS (règles par ligne) : on l'active sur toutes les tables par précaution.
+do $$ declare r record; begin
+  for r in select tablename from pg_tables where schemaname='public' loop
+    execute format('alter table public.%I enable row level security', r.tablename);
+  end loop;
+end $$;
+grant usage on schema public to anon, authenticated, service_role;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant all on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public to authenticated, service_role;
+grant select on public.courses, public.testimonials, public.site_settings, public.payment_methods to anon;
+grant execute on all functions in schema public to service_role;
+alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant usage, select on sequences to authenticated, service_role;
+
+-- Super administrateur principal : 100 % des droits. Les autres membres n'ont que les accès accordés dans "Équipe et rôles".
+insert into super_admins(email) values ('chaldinmulongo977@gmail.com') on conflict do nothing;
+update profiles set role='super_admin' where lower(email)='chaldinmulongo977@gmail.com';
+-- Paiement par page SasPay, devises par moyen, qualités vidéo, directs, bibliothèque. À exécuter après upgrade8.sql. Idempotent.
+alter table payment_methods add column if not exists currency text;
+alter table payment_methods add column if not exists rate numeric;
+alter table payment_methods add column if not exists prefixes text;
+alter table saspay_attempts add column if not exists session_id text;
+insert into site_settings(key,value) values ('pay_mode','checkout') on conflict (key) do nothing;
+drop policy if exists s_sel_pub9 on site_settings; create policy s_sel_pub9 on site_settings for select using (key in ('pay_mode'));
+
+-- Qualités vidéo (l'administrateur envoie une version par qualité)
+alter table modules add column if not exists v360 text; alter table modules add column if not exists v480 text;
+alter table modules add column if not exists v720 text; alter table modules add column if not exists v1080 text;
+drop policy if exists vid_read on storage.objects; create policy vid_read on storage.objects for select using (bucket_id='videos' and (public.has_perm('content') or exists(select 1 from public.modules m where name in (m.video_path,m.v360,m.v480,m.v720,m.v1080))));
+drop policy if exists vid_ins on storage.objects; create policy vid_ins on storage.objects for insert with check (bucket_id='videos' and public.has_perm('content'));
+drop policy if exists vid_upd on storage.objects; create policy vid_upd on storage.objects for update using (bucket_id='videos' and public.has_perm('content'));
+drop policy if exists vid_del on storage.objects; create policy vid_del on storage.objects for delete using (bucket_id='videos' and public.has_perm('content'));
+update storage.buckets set allowed_mime_types=array['video/mp4','video/webm','video/quicktime','video/x-matroska','video/x-msvideo','video/ogg','video/3gpp','video/mpeg','video/x-m4v'] where id='videos';
+
+-- Cours en direct (YouTube / Facebook / lien externe)
+create table if not exists live_sessions(id uuid primary key default gen_random_uuid(), title text not null, description text, starts_at timestamptz not null, url text not null, is_live boolean not null default false, premium_only boolean not null default true, created_at timestamptz default now());
+alter table live_sessions enable row level security;
+drop policy if exists ls_sel on live_sessions; create policy ls_sel on live_sessions for select using ((not premium_only and auth.uid() is not null) or is_premium() or has_perm('content'));
+drop policy if exists ls_adm on live_sessions; create policy ls_adm on live_sessions for all using (has_perm('content')) with check (has_perm('content'));
+
+-- Bibliothèque (livres PDF, audio, tout format)
+create table if not exists resources(id uuid primary key default gen_random_uuid(), title text not null, author text, category text default 'Autre', description text, path text not null, cover_url text, size bigint default 0, mime text, premium_only boolean not null default true, created_at timestamptz default now());
+alter table resources enable row level security;
+drop policy if exists rs_sel on resources; create policy rs_sel on resources for select using ((not premium_only and auth.uid() is not null) or is_premium() or has_perm('content'));
+drop policy if exists rs_adm on resources; create policy rs_adm on resources for all using (has_perm('content')) with check (has_perm('content'));
+insert into storage.buckets(id,name,public) values ('library','library',false) on conflict (id) do nothing;
+drop policy if exists lib_sel on storage.objects; create policy lib_sel on storage.objects for select using (bucket_id='library' and (public.has_perm('content') or exists(select 1 from public.resources r where r.path=name)));
+drop policy if exists lib_ins on storage.objects; create policy lib_ins on storage.objects for insert with check (bucket_id='library' and public.has_perm('content'));
+drop policy if exists lib_upd on storage.objects; create policy lib_upd on storage.objects for update using (bucket_id='library' and public.has_perm('content'));
+drop policy if exists lib_del on storage.objects; create policy lib_del on storage.objects for delete using (bucket_id='library' and public.has_perm('content'));
+grant select, insert, update, delete on public.live_sessions, public.resources to authenticated;
+grant all on public.live_sessions, public.resources to service_role;
